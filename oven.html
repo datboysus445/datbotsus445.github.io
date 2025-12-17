@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width,initial-scale=1" />
+	<title>oven — Fill Bar</title>
+	<style>
+		:root{--bar-width:84px}
+		html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
+		.stage{position:relative;height:100vh;overflow:hidden;background:linear-gradient(to bottom, #fff 50%, transparent 50%), url('oven.jpg') bottom / 100% 50% no-repeat}
+		/* Draggable pan */
+		#pan{position:absolute;left:48px;top:64px;width:260px;touch-action:none;cursor:grab;user-select:none}
+		#pan.dragging{cursor:grabbing}
+
+		/* Right-side vertical bar */
+		.bar{position:fixed;right:24px;top:0;bottom:0;width:var(--bar-width);display:flex;align-items:center;justify-content:center}
+		.bar-track{position:relative;width:48px;height:78vh;background:#eee;border-radius:24px;box-shadow:inset 0 2px 6px rgba(0,0,0,0.06);overflow:hidden}
+		.bar-fill{position:absolute;left:0;right:0;bottom:0;height:0%;background:rgb(245, 248, 35);transition:height 120ms linear}
+		.bar-label{position:absolute;left:0;right:0;top:6px;text-align:center;font-size:13px;color:#333}
+		.bar-percent{position:absolute;left:0;right:0;bottom:6px;text-align:center;font-weight:600;color:#333}
+
+		/* Instructions */
+		.help{position:fixed;left:50%;transform:translateX(-50%);top:12px;background:rgba(255,255,255,0.95);padding:10px 14px;border-radius:10px;box-shadow:0 4px 10px rgba(0,0,0,0.06);max-width:86%;text-align:center;color:#000000}
+		.help p{margin:0;font-size:22px;color:inherit}
+		.credit{position:fixed;left:18px;bottom:12px;color:#666;font-size:18px}
+	</style>
+</head>
+<body>
+	<div class="stage" id="stage" >
+		<div class="help"><p> eggs have been fried in a pan sence the 1600s. And thats exactly what youll be
+			doing here. As you drag the pan around you will be frining the eggs and when youve filled the Bar
+			the eggs will be fried and put on the plate by the click of a button.
+			  
+		</p></div>
+
+		<!-- Pan image (must exist in same folder) -->
+		<img id="pan" src="pan.jpg" alt="Pan" draggable="false">
+
+		<!-- Right-side fill bar -->
+		<div class="bar" aria-hidden="false">
+			<div class="bar-track" id="barTrack">
+				<div class="bar-label">Fill</div>
+				<div class="bar-fill" id="barFill" style="height:0%"></div>
+				<div class="bar-percent" id="barPercent">0%</div>
+			</div>
+		</div>
+
+		<button id="nextButton" style="display:none; position:absolute; right:24px; bottom:24px; padding:10px 20px; background:#4CAF50; color:white; border:none; border-radius:5px; cursor:pointer;" onclick="window.location.href='plate.html'">Go to end</button>
+
+		
+
+	</div>
+
+	<script>
+		(function(){
+			const pan = document.getElementById('pan');
+			const barFill = document.getElementById('barFill');
+			const barPercent = document.getElementById('barPercent');
+
+			// Drag state
+			let isDragging = false;
+			let offsetX = 0, offsetY = 0;
+
+			// Shake accumulation state
+			const REQUIRED_SHAKE_MS = 10000; // 10 seconds required to reach full
+			let accumulatedShakeMs = 0; // how many ms of shaking accumulated
+			let filled = false;
+
+			let lastClientX = 0;
+			let lastMoveTime = 0; // ms timestamp of last pointermove while dragging
+
+			// Parameters
+			const HORIZONTAL_THRESHOLD = 2; // px, small movements ignored
+			const IDLE_TIMEOUT = 150; // ms before considered idle
+			const DECAY_PERCENT_PER_SEC = 10; // percent/second to decay while idle
+
+			function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
+
+			function updateUIFromAccum(){
+				const pct = Math.round((accumulatedShakeMs / REQUIRED_SHAKE_MS) * 100);
+				barFill.style.height = pct + '%';
+				barPercent.textContent = pct + '%';
+			}
+
+			// Pointer down
+			pan.addEventListener('pointerdown', (ev)=>{
+				ev.preventDefault();
+				pan.setPointerCapture(ev.pointerId);
+				isDragging = true;
+				pan.classList.add('dragging');
+				const rect = pan.getBoundingClientRect();
+				offsetX = ev.clientX - rect.left;
+				offsetY = ev.clientY - rect.top;
+				lastClientX = ev.clientX;
+				lastMoveTime = Date.now();
+			});
+
+			// Pointer move: move pan and mark shaking when horizontal movement detected
+			window.addEventListener('pointermove', (ev)=>{
+				if(!isDragging) return;
+				ev.preventDefault();
+				// Move pan
+				let x = ev.clientX - offsetX;
+				let y = ev.clientY - offsetY;
+				const pad = 6;
+				const maxX = window.innerWidth - pan.offsetWidth - pad - 120;
+				const maxY = window.innerHeight - pan.offsetHeight - pad;
+				x = clamp(x, pad, Math.max(pad, maxX));
+				y = clamp(y, pad, Math.max(pad, maxY));
+				pan.style.left = x + 'px';
+				pan.style.top = y + 'px';
+
+				// Detect horizontal shake (any significant movement counts as shaking time)
+				const dx = ev.clientX - lastClientX;
+				if (Math.abs(dx) >= HORIZONTAL_THRESHOLD){
+					lastMoveTime = Date.now();
+				}
+				lastClientX = ev.clientX;
+			});
+
+			// Pointer up
+			window.addEventListener('pointerup', (ev)=>{
+				if(!isDragging) return;
+				isDragging = false;
+				try{ pan.releasePointerCapture(ev.pointerId); }catch(e){}
+				pan.classList.remove('dragging');
+				lastMoveTime = Date.now();
+			});
+
+			// Animation loop: accumulate shake time while moving; decay when idle; stop decaying when full
+			let lastFrame = performance.now();
+			function loop(now){
+				const dt = (now - lastFrame) / 1000; lastFrame = now;
+				const nowMs = Date.now();
+				const moving = (nowMs - lastMoveTime) <= IDLE_TIMEOUT;
+
+				if (!filled){
+					if (moving){
+						// accumulate real time while moving
+						accumulatedShakeMs += dt * 1000;
+					} else {
+						// decay accumulated time when idle
+						const decayPerSecMs = (DECAY_PERCENT_PER_SEC / 100) * REQUIRED_SHAKE_MS;
+						accumulatedShakeMs -= decayPerSecMs * dt;
+					}
+
+					accumulatedShakeMs = clamp(accumulatedShakeMs, 0, REQUIRED_SHAKE_MS);
+					if (accumulatedShakeMs >= REQUIRED_SHAKE_MS){
+						filled = true;
+						accumulatedShakeMs = REQUIRED_SHAKE_MS;
+						document.getElementById('nextButton').style.display = 'block';
+					}
+					updateUIFromAccum();
+				}
+
+				requestAnimationFrame(loop);
+			}
+			requestAnimationFrame(loop);
+
+			// Init
+			accumulatedShakeMs = 0;
+			updateUIFromAccum();
+		})();
+	</script>
+</body>
+</html>
